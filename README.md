@@ -116,6 +116,14 @@ The `I2C LCD 1602` on the controller ESP32 shows short status messages such as:
 - `Bottle +15 pts` or `Can +10 pts`
 - `Points failed` / `Retry item`
 
+## 9. Face recognition (Jetson simulation)
+
+The web app enrolls a face from Profile. Photos stay in a private Supabase bucket only until [`face_terminal/first_contact.py`](face_terminal/first_contact.py) turns them into a 512-number InsightFace vector on the GPU and deletes the images.
+
+On this PC the script loads `buffalo_l` into the RTX 4060 VRAM and stands in for a Jetson Orin Nano Super. The same file, with the JetPack build of `onnxruntime-gpu`, is what runs on the board. Space in the preview window acts as the machine button. **Activar con mi rostro** on the home screen asks the machine to verify the signed-in user. A match opens a `source = 'face'` session; the ESP32 credits points through the existing `poll-session` / `add-points` path.
+
+Apply [`supabase/migrations/007_insightface_faces.sql`](supabase/migrations/007_insightface_faces.sql) in the Supabase SQL editor, then follow [`face_terminal/README.md`](face_terminal/README.md).
+
 ## Project Structure
 
 ```
@@ -123,10 +131,12 @@ app/
   (auth)/           - Login, Register, Profile Setup screens
   (tabs)/           - Home, Rewards Store, History, Profile, Admin tabs
   scan.tsx          - Machine QR scanner
+  face.tsx          - Face enrollment photos for the GPU script
   session/[id].tsx  - Armed recycling session status
 components/         - Reusable UI components
 lib/                - Supabase client, auth helpers, types
 constants/          - Theme colors, spacing, typography
+face_terminal/      - InsightFace script (PC VRAM simulation and Jetson)
 supabase/
   migrations/       - SQL schema and seed data
   functions/        - Edge Functions (add-points, validate-account, arm-session, poll-session)

@@ -63,6 +63,7 @@ function RootLayoutNav() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="scan" />
+        <Stack.Screen name="face" />
         <Stack.Screen name="session/[id]" />
       </Stack>
     </>

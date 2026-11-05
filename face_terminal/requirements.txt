@@ -1,0 +1,9 @@
+# onnxruntime-gpu NO va aquí.
+# En esta PC:        pip install onnxruntime-gpu
+# En la Jetson:      pip install onnxruntime-gpu --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+# El script es el mismo. Ver README.md.
+insightface==0.7.3
+opencv-python
+numpy
+requests
+python-dotenv
