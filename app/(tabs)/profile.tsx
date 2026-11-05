@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useAuth } from '../../lib/AuthContext';
 import { updateProfile, signOut, fetchCities } from '../../lib/auth';
 import { fetchUserMedals } from '../../lib/ranking';
@@ -21,6 +22,7 @@ import { City, MonthlyUserResult } from '../../lib/database.types';
 import { Colors, Spacing, BorderRadius, FontSize } from '../../constants/theme';
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const { user, profile, refreshProfile } = useAuth();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -303,6 +305,23 @@ export default function ProfileScreen() {
           )}
         </View>
 
+        <TouchableOpacity
+          style={styles.faceButton}
+          onPress={() => router.push('/face')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="scan-outline" size={20} color={Colors.primaryDark} />
+          <View style={styles.faceButtonText}>
+            <Text style={styles.faceButtonTitle}>Registrar rostro</Text>
+            <Text style={styles.faceButtonSubtitle}>
+              {profile?.face_consent_at
+                ? 'Hay un vector guardado. Puedes capturarlo de nuevo.'
+                : 'Guarda tu rostro para activar la máquina.'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textSecondary} />
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
           <Ionicons name="log-out-outline" size={20} color={Colors.error} />
           <Text style={styles.signOutText}>Sign Out</Text>
@@ -569,6 +588,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: Spacing.md,
+  },
+  faceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    borderRadius: BorderRadius.lg,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  faceButtonText: {
+    flex: 1,
+    gap: 2,
+  },
+  faceButtonTitle: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  faceButtonSubtitle: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
   },
   signOutButton: {
     flexDirection: 'row',

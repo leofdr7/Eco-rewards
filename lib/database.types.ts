@@ -21,6 +21,7 @@ export interface Profile {
   monthly_eco_points: number;
   city_id: string | null;
   role: 'user' | 'admin';
+  face_consent_at: string | null;
   created_at: string;
   updated_at: string;
   city?: City | null;
@@ -53,7 +54,7 @@ export interface RecyclingSession {
   machine_id: string;
   user_id: string;
   status: 'armed' | 'completed' | 'expired' | 'cancelled';
-  source: 'qr' | 'keypad';
+  source: 'qr' | 'keypad' | 'face';
   armed_at: string;
   expires_at: string;
   items_processed: number;
@@ -61,6 +62,36 @@ export interface RecyclingSession {
   created_at: string;
   updated_at: string;
   machine?: Machine;
+}
+
+export interface FaceEmbedding {
+  id: string;
+  user_id: string;
+  embedding: number[];
+  model: string;
+  created_at: string;
+}
+
+export interface FaceEnrollmentJob {
+  id: string;
+  user_id: string;
+  status: 'pending' | 'done' | 'failed';
+  storage_paths: string[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FaceRequest {
+  id: string;
+  machine_id: string;
+  user_id: string;
+  status: 'pending' | 'matched' | 'failed' | 'expired';
+  session_id: string | null;
+  error: string | null;
+  created_at: string;
+  expires_at: string;
+  updated_at: string;
 }
 
 export interface Reward {

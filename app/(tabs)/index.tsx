@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -18,6 +19,13 @@ import PointsCard from '../../components/PointsCard';
 import TransactionItem from '../../components/TransactionItem';
 import AccountNumberModal from '../../components/AccountNumberModal';
 import { Colors, Spacing, BorderRadius, FontSize } from '../../constants/theme';
+import {
+  FACE_MACHINE_CODE,
+  FaceRequestRow,
+  countFaceEmbeddings,
+  createFaceRequest,
+  findActiveMachine,
+} from '../../lib/faces';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -25,6 +33,8 @@ export default function HomeScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [showAccountNumber, setShowAccountNumber] = useState(false);
+  const [faceRequest, setFaceRequest] = useState<FaceRequestRow | null>(null);
+  const [armingFace, setArmingFace] = useState(false);
   const [stats, setStats] = useState({ bottles: 0, cans: 0 });
   const [cityBattleRank, setCityBattleRank] = useState<number | null>(null);
 
@@ -84,6 +94,58 @@ export default function HomeScreen() {
     fetchStats();
     fetchCityRank();
   }, [fetchTransactions, fetchStats, fetchCityRank]);
+
+  useEffect(() => {
+    if (!faceRequest || faceRequest.status !== 'pending') return;
+
+    const timer = setInterval(async () => {
+      const { data } = await supabase
+        .from('face_requests')
+        .select('id,machine_id,user_id,status,session_id,error,created_at,expires_at')
+        .eq('id', faceRequest.id)
+        .single();
+      if (!data) return;
+      const next = data as FaceRequestRow;
+      setFaceRequest(next);
+      if (next.status === 'matched' && next.session_id) {
+        router.push({
+          pathname: '/session/[id]',
+          params: { id: next.session_id },
+        });
+      }
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [faceRequest, router]);
+
+  const activateWithFace = async () => {
+    if (!user || armingFace) return;
+    setArmingFace(true);
+    try {
+      const samples = await countFaceEmbeddings(user.id);
+      if (samples < 1) {
+        Alert.alert(
+          'Registra tu rostro',
+          'En Perfil, captura tu rostro antes de activar la máquina.'
+        );
+        return;
+      }
+      const machine = await findActiveMachine(FACE_MACHINE_CODE);
+      if (!machine) {
+        Alert.alert(
+          'Máquina no encontrada',
+          `No hay una máquina activa ${FACE_MACHINE_CODE}.`
+        );
+        return;
+      }
+      const request = await createFaceRequest(machine.id, user.id);
+      setFaceRequest(request);
+    } catch (error: any) {
+      Alert.alert('No se pudo pedir el reconocimiento', error.message || 'Inténtalo de nuevo.');
+    } finally {
+      setArmingFace(false);
+    }
+  };
 
   // Realtime subscription for live point updates
   useEffect(() => {
@@ -192,6 +254,28 @@ export default function HomeScreen() {
             <Text style={styles.recycleButtonText}>Scan Machine QR</Text>
           </View>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.faceButton,
+            (armingFace || faceRequest?.status === 'pending') && styles.faceButtonBusy,
+          ]}
+          onPress={activateWithFace}
+          activeOpacity={0.8}
+          disabled={armingFace || faceRequest?.status === 'pending'}
+        >
+          <Ionicons name="scan-outline" size={18} color={Colors.primaryDark} />
+          <Text style={styles.fallbackButtonText}>
+            {faceRequest?.status === 'pending'
+              ? 'Mira a la cámara de la máquina…'
+              : faceRequest?.status === 'failed' || faceRequest?.status === 'expired'
+                ? 'Reintentar con mi rostro'
+                : 'Activar con mi rostro'}
+          </Text>
+        </TouchableOpacity>
+        {faceRequest && faceRequest.status !== 'pending' && faceRequest.status !== 'matched' ? (
+          <Text style={styles.faceHint}>{faceRequest.error || 'No se reconoció el rostro.'}</Text>
+        ) : null}
 
         <TouchableOpacity
           style={styles.fallbackButton}
@@ -322,6 +406,29 @@ const styles = StyleSheet.create({
     color: Colors.surface,
     fontSize: FontSize.lg,
     fontWeight: '700',
+  },
+  faceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  faceButtonBusy: {
+    opacity: 0.6,
+  },
+  faceHint: {
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.xs,
+    textAlign: 'center',
+    color: Colors.error,
+    fontSize: FontSize.xs,
   },
   fallbackButton: {
     flexDirection: 'row',
