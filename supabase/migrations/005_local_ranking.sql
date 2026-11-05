@@ -293,7 +293,7 @@ values (
 )
 on conflict (year, month) do nothing;
 
--- Monthly reset: 00:05 on the 1st (America/El_Salvador) finalize previous month.
+-- Monthly reset: 00:05 on the 1st in El Salvador (06:05 UTC/GMT).
 create extension if not exists pg_cron with schema pg_catalog;
 
 select cron.unschedule(jobid)
@@ -302,7 +302,7 @@ where jobname = 'finalize-monthly-ranking';
 
 select cron.schedule(
   'finalize-monthly-ranking',
-  '5 0 1 * *',
+  '5 6 1 * *',
   $$
   select public.finalize_monthly_competition(
     extract(year from timezone('America/El_Salvador', now() - interval '1 month'))::integer,

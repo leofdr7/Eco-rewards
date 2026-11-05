@@ -29,28 +29,12 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function hasAcceptedApiKey(req: Request) {
-  const configuredKey =
-    Deno.env.get('SUPABASE_ANON_KEY') ||
-    Deno.env.get('SUPABASE_PUBLISHABLE_KEY') ||
-    '';
-  if (!configuredKey) return true;
-
-  const apiKey = req.headers.get('apikey');
-  const bearer = req.headers.get('Authorization')?.replace('Bearer ', '');
-  return apiKey === configuredKey || bearer === configuredKey;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    if (!hasAcceptedApiKey(req)) {
-      return jsonResponse({ error: 'Unauthorized machine request' }, 401);
-    }
-
     const { user_id, account_number, session_id, machine_code, item_type } = await req.json();
 
     if ((!user_id && !account_number && !session_id) || !item_type) {

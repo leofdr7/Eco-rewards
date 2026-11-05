@@ -29,21 +29,26 @@
 #include <ESP32Servo.h>
 #include <HardwareSerial.h>
 #include <Wire.h>
+#include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #include "LiquidCrystal_I2C.h"
 
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* SUPABASE_URL = "https://your-project.supabase.co";
-const char* SUPABASE_ANON_KEY = "your-anon-key";
-const char* MACHINE_CODE = "YOUR_MACHINE_CODE";
+const char* WIFI_SSID = "iPhone de Leo";
+const char* WIFI_PASSWORD = "flecha85espacial";
+const char* SUPABASE_URL = "https://ocarmdddmhtrrnlmupge.supabase.co";
+const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jYXJtZGRkbWh0cnJubG11cGdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwODI2MjEsImV4cCI6MjEwNzY1ODYyMX0.CQ2D9S9sprjknn_PF_XQ4CuXlT9R9aXhhH8C6-Ar0kw";
+const char* MACHINE_CODE = "ECO-48FM6V";
 
 const byte ROWS = 4;
 const byte COLS = 4;
+// Key labels as seen from the front of the keypad, top to bottom.
 char keys[ROWS][COLS] = {
   {'1', '2', '3', 'A'},
   {'4', '5', '6', 'B'},
-  {'*', '0', '#', 'D'},
-  {'7', '8', '9', 'C'}
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
 };
 
 // ESP32 Dev Module pinout (keypad rows/cols)
@@ -53,6 +58,7 @@ byte colPins[COLS] = {27, 26, 25, 33};
 const int ACCOUNT_NUMBER_LENGTH = 6;
 const unsigned long ACTIVE_ACCOUNT_TIMEOUT_MS = 60000;
 const unsigned long SESSION_POLL_INTERVAL_MS = 2000;
+const int QR_REFRESH_HTTP_TIMEOUT_MS = 5000;
 
 const int VISION_UART_BAUD_RATE = 115200;
 const int VISION_RX_PIN = 32;
@@ -96,12 +102,30 @@ unsigned long activeAccountSetAt = 0;
 unsigned long lastSessionPollAt = 0;
 bool isProcessingItem = false;
 bool activeSessionFromQr = false;
+bool qrRefreshInFlight = false;
+
+struct QrRefreshRequest {
+  char sessionId[48];
+};
+
+struct QrRefreshResult {
+  char requestedSessionId[48];
+  char sessionId[48];
+  char accountNumber[16];
+  int httpCode;
+  bool requestSucceeded;
+  bool armed;
+};
+
+QueueHandle_t qrRefreshResults = nullptr;
 
 void connectToWiFi();
 void clearActiveAccount(const String& reason);
 void handleQrSessionPolling();
 bool pollArmedSession();
-bool refreshActiveQrSession();
+void startQrSessionRefresh();
+void qrSessionRefreshTask(void* parameter);
+void handleQrSessionRefreshResult();
 bool validateAccountNumber(const String& accountNumber);
 bool sendPoints(const String& accountNumber, const String& itemType);
 void setRelayIndicator(bool on);
@@ -151,14 +175,20 @@ void setup() {
   // #endregion
   Serial.println("UART RX ready on GPIO32.");
 
+  qrRefreshResults = xQueueCreate(1, sizeof(QrRefreshResult));
+  if (qrRefreshResults == nullptr) {
+    Serial.println("Could not create QR refresh queue.");
+  }
+
   connectToWiFi();
   showIdlePrompt();
 }
 
 void loop() {
   handleKeypadInput();
-  handleQrSessionPolling();
+  handleQrSessionRefreshResult();
   handleActiveAccountTimeout();
+  handleQrSessionPolling();
   handleVisionMessages();
   delay(20);
 }
@@ -217,9 +247,7 @@ void handleQrSessionPolling() {
   lastSessionPollAt = millis();
 
   if (activeSessionFromQr && activeSessionId.length() > 0) {
-    if (!refreshActiveQrSession()) {
-      clearActiveAccount("QR session cancelled or expired");
-    }
+    startQrSessionRefresh();
     return;
   }
 
@@ -279,73 +307,108 @@ bool pollArmedSession() {
   turnOnRelayIndicator();
   Serial.println("QR session armed for account: " + accountNumber);
   Serial.println("Session ID: " + sessionId);
-  showStatus("QR account valid", "Insert item");
-  delay(STATUS_MESSAGE_DELAY_MS);
   showWaitingForItem();
   return true;
 }
 
-bool refreshActiveQrSession() {
-  connectToWiFi();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected.");
-    return true;
+void startQrSessionRefresh() {
+  if (qrRefreshInFlight || qrRefreshResults == nullptr) {
+    return;
   }
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  String url = String(SUPABASE_URL) + "/functions/v1/poll-session";
-
-  http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
-  http.addHeader("apikey", SUPABASE_ANON_KEY);
-
-  String body = "{\"machine_code\":\"" + String(MACHINE_CODE) + "\"}";
-  int httpCode = http.POST(body);
-  String response = http.getString();
-  http.end();
-
-  if (httpCode != 200) {
-    Serial.println("Active QR session refresh failed. HTTP code: " + String(httpCode));
-    Serial.println(response);
-    return true;
+  QrRefreshRequest* request = static_cast<QrRefreshRequest*>(malloc(sizeof(QrRefreshRequest)));
+  if (request == nullptr) {
+    Serial.println("Could not allocate QR refresh request.");
+    return;
   }
 
-  if (!jsonHasTrue(response, "armed")) {
+  activeSessionId.toCharArray(request->sessionId, sizeof(request->sessionId));
+  qrRefreshInFlight = true;
+  if (xTaskCreate(qrSessionRefreshTask, "qr-refresh", 8192, request, 1, nullptr) != pdPASS) {
+    qrRefreshInFlight = false;
+    free(request);
+    Serial.println("Could not start QR refresh task.");
+  }
+}
+
+void qrSessionRefreshTask(void* parameter) {
+  QrRefreshRequest* request = static_cast<QrRefreshRequest*>(parameter);
+  QrRefreshResult result = {};
+  strncpy(result.requestedSessionId, request->sessionId, sizeof(result.requestedSessionId) - 1);
+  free(request);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    String url = String(SUPABASE_URL) + "/functions/v1/poll-session";
+
+    http.begin(client, url);
+    http.setTimeout(QR_REFRESH_HTTP_TIMEOUT_MS);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+    http.addHeader("apikey", SUPABASE_ANON_KEY);
+
+    String body = "{\"machine_code\":\"" + String(MACHINE_CODE) + "\"}";
+    result.httpCode = http.POST(body);
+    String response = http.getString();
+    http.end();
+
+    if (result.httpCode == 200) {
+      result.requestSucceeded = true;
+      result.armed = jsonHasTrue(response, "armed");
+      if (result.armed) {
+        extractJsonString(response, "account_number").toCharArray(result.accountNumber, sizeof(result.accountNumber));
+        extractJsonString(response, "session_id").toCharArray(result.sessionId, sizeof(result.sessionId));
+      }
+    }
+  } else {
+    result.httpCode = -1;
+  }
+
+  xQueueSend(qrRefreshResults, &result, 0);
+  vTaskDelete(nullptr);
+}
+
+void handleQrSessionRefreshResult() {
+  if (qrRefreshResults == nullptr) {
+    return;
+  }
+
+  QrRefreshResult result;
+  if (xQueueReceive(qrRefreshResults, &result, 0) != pdTRUE) {
+    return;
+  }
+
+  qrRefreshInFlight = false;
+  if (!activeSessionFromQr || activeSessionId != result.requestedSessionId) {
+    return;
+  }
+
+  if (!result.requestSucceeded) {
+    Serial.println("Active QR session refresh failed. HTTP code: " + String(result.httpCode));
+    return;
+  }
+
+  if (!result.armed) {
     Serial.println("Active QR session is no longer armed in Supabase.");
-    Serial.println("Previous session ID: " + activeSessionId);
-    return false;
+    clearActiveAccount("QR session cancelled or expired");
+    return;
   }
 
-  String accountNumber = extractJsonString(response, "account_number");
-  String sessionId = extractJsonString(response, "session_id");
-
-  if (accountNumber.length() == 0 || sessionId.length() == 0) {
+  if (result.accountNumber[0] == '\0' || result.sessionId[0] == '\0') {
     Serial.println("Active QR refresh response missing account_number or session_id.");
-    Serial.println(response);
-    return true;
+    return;
   }
 
   activeAccountSetAt = millis();
-
-  if (sessionId != activeSessionId) {
+  if (activeSessionId != result.sessionId) {
     Serial.println("Active QR session changed in Supabase.");
-    Serial.println("Previous session ID: " + activeSessionId);
-    Serial.println("New session ID: " + sessionId);
-
-    activeAccountNumber = accountNumber;
-    activeSessionId = sessionId;
-    activeSessionFromQr = true;
+    activeAccountNumber = result.accountNumber;
+    activeSessionId = result.sessionId;
     turnOnRelayIndicator();
-    showStatus("QR account valid", "Insert item");
-    delay(STATUS_MESSAGE_DELAY_MS);
     showWaitingForItem();
   }
-
-  return true;
 }
 
 bool validateAccountNumber(const String& accountNumber) {
